@@ -109,6 +109,9 @@ class SMSMessageTemplate(Template):
         super().__init__(template, values)
 
     def __str__(self):
+        return self._content
+
+    def _text_content(self):
         return Take.as_field(
             self.content, self.values, html='passthrough'
         ).then(
@@ -125,9 +128,9 @@ class SMSMessageTemplate(Template):
 
     @property
     def content_count(self):
-        return len((
-            str(self) if self._values else add_prefix(self.content.strip(), self.prefix)
-        ).encode(self.encoding))
+        return len(
+           self._text_content().encode(self.encoding)
+        )
 
     @property
     def fragment_count(self):

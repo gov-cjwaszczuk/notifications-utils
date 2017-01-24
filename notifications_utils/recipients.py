@@ -192,6 +192,14 @@ class RecipientCSV():
         for row_index, row in enumerate(self.rows):
             if self.template:
                 self.template.values = dict(row.items())
+
+            message_too_long = None
+            if self.template_type == 'sms':
+                message_too_long = bool(
+                    self.template and
+                    self.template.content_count > self.character_limit
+                )
+
             yield dict(
                 columns=Columns({key: {
                     'data': value,
@@ -201,10 +209,7 @@ class RecipientCSV():
                     )
                 } for key, value in row.items()}),
                 index=row_index,
-                message_too_long=bool(
-                    self.template and
-                    self.template.content_count > self.character_limit
-                )
+                message_too_long=message_too_long
             )
 
     @property
