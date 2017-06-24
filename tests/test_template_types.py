@@ -471,6 +471,12 @@ def test_subject_line_gets_replaced():
 
 
 @pytest.mark.parametrize('template_class, extra_args, expected_field_calls', [
+    (Template, {}, [
+        mock.call('content', {}, html='escape'),
+    ]),
+    (WithSubjectTemplate, {}, [
+        mock.call('content', {}, html='escape'),
+    ]),
     (PlainTextEmailTemplate, {}, [
         mock.call('content', {}, html='passthrough', markdown_lists=True)
     ]),
@@ -537,6 +543,24 @@ def test_templates_handle_html(
 ):
     assert str(template_class({'content': 'content', 'subject': 'subject'}, **extra_args))
     assert mock_field_init.call_args_list == expected_field_calls
+
+
+def test_basic_templates_return_markup():
+
+    template_dict = {'content': 'content', 'subject': 'subject'}
+
+    assert isinstance(
+        str(Template(template_dict)),
+        Markup,
+    )
+    assert isinstance(
+        str(WithSubjectTemplate(template_dict)),
+        Markup,
+    )
+    assert isinstance(
+        WithSubjectTemplate(template_dict).subject,
+        Markup,
+    )
 
 
 @pytest.mark.parametrize('template_instance, expected_placeholders', [
