@@ -3,6 +3,7 @@ import urllib
 
 import mistune
 import bleach
+from itertools import count
 from flask import Markup
 from notifications_utils import gsm
 import smartypants
@@ -47,7 +48,7 @@ smartypants.tags_to_skip = smartypants.tags_to_skip + ['a']
 
 whitespace_before_punctuation = re.compile(r'[ \t]+([,|\.])')
 
-hyphens_surrounded_by_spaces = re.compile(r'\s+[-|–|—]+\s+')
+hyphens_surrounded_by_spaces = re.compile(r'\s+[-|–|—]{1,3}\s+')
 
 multiple_newlines = re.compile(r'((\n)\2{2,})')
 
@@ -66,6 +67,12 @@ def unlink_govuk_escaped(message):
 
 def nl2br(value):
     return re.sub(r'\n|\r', '<br>', value.strip())
+
+
+def nl2li(value):
+    return '<ul><li>{}</li></ul>'.format('</li><li>'.join(
+        value.strip().split('\n')
+    ))
 
 
 def add_prefix(body, prefix=None):
@@ -220,8 +227,30 @@ def strip_characters_inserted_to_force_newlines(value):
     )
 
 
+def strip_leading_whitespace(value):
+    return value.lstrip()
+
+
+def add_trailing_newline(value):
+    return '{}\n'.format(value)
+
+
 def tweak_dvla_list_markup(value):
     return value.replace('<cr><cr><np>', '<cr><np>').replace('<p><cr><p><cr>', '<p><cr>')
+
+
+def remove_trailing_linebreak(value):
+
+    block_linebreak = NotifyLetterMarkdownPreviewRenderer.block_linebreak(None)
+
+    if value.endswith(block_linebreak):
+        return remove_trailing_linebreak(
+            value[:(
+                -1 * len(block_linebreak)
+            )].rstrip()
+        )
+    else:
+        return value
 
 
 class NotifyLetterMarkdownPreviewRenderer(mistune.Renderer):
@@ -291,53 +320,6 @@ class NotifyLetterMarkdownPreviewRenderer(mistune.Renderer):
 
     def footnotes(self, text):
         return text
-
-
-class NotifyLetterMarkdownDVLARenderer(NotifyLetterMarkdownPreviewRenderer):
-
-    def header(self, text, level, raw=None):
-        if level == 1:
-            return '<h2>{}<normal><cr><cr>'.format(text)
-        return self.paragraph(text)
-
-    def paragraph(self, text):
-        if text.strip():
-            return '{}<cr><cr>'.format(text)
-        return ''
-
-    def linebreak(self):
-        return "<cr>"
-
-    def newline(self):
-        return "<cr>"
-
-    def list(self, body, ordered=True):
-        return (
-            '{}'
-            '{}'
-            '<p>'
-            '<cr>'
-        ).format(
-            '' if ordered else '<cr>',
-            ''.join(
-                '{}{}'.format(
-                    '<np>' if ordered else '<op><bul><tab>',
-                    line
-                )
-                for line in filter(None, body.split('\n'))
-            ),
-        )
-
-    def list_item(self, text):
-        return '{}\n'.format(text.strip())
-
-    def link(self, link, title, content):
-        return '{}: {}'.format(content, self.autolink(link))
-
-    def autolink(self, link, is_email=False):
-        return '<b>{}<normal>'.format(
-            link.replace('http://', '').replace('https://', '')
-        )
 
 
 class NotifyEmailMarkdownRenderer(NotifyLetterMarkdownPreviewRenderer):
@@ -440,19 +422,92 @@ class NotifyEmailMarkdownRenderer(NotifyLetterMarkdownPreviewRenderer):
             link
         )
 
+    def double_emphasis(self, text):
+        return '**{}**'.format(text)
+
+    def emphasis(self, text):
+        return '*{}*'.format(text)
+
+
+class NotifyPlainTextEmailMarkdownRenderer(NotifyEmailMarkdownRenderer):
+
+    COLUMN_WIDTH = 65
+
+    def header(self, text, level, raw=None):
+        if level == 1:
+            return ''.join((
+                self.linebreak() * 3,
+                text,
+                self.linebreak(),
+                '-' * self.COLUMN_WIDTH,
+            ))
+        return self.paragraph(text)
+
+    def hrule(self):
+        return self.paragraph(
+            '=' * self.COLUMN_WIDTH
+        )
+
+    def linebreak(self):
+        return '\n'
+
+    def list(self, body, ordered=True):
+
+        def _get_list_marker():
+            decimal = count(1)
+            return lambda _: '{}.'.format(next(decimal)) if ordered else '•'
+
+        return ''.join((
+            self.linebreak(),
+            re.sub(
+                magic_sequence_regex,
+                _get_list_marker(),
+                body,
+            ),
+        ))
+
+    def list_item(self, text):
+        return ''.join((
+            self.linebreak(),
+            MAGIC_SEQUENCE,
+            ' ',
+            text.strip(),
+        ))
+
+    def paragraph(self, text):
+        if text.strip():
+            return ''.join((
+                self.linebreak() * 2,
+                text,
+            ))
+        return ""
+
+    def block_quote(self, text):
+        return text
+
+    def link(self, link, title, content):
+        return ''.join((
+            content,
+            ' ({})'.format(title) if title else '',
+            ': ',
+            link,
+        ))
+
+    def autolink(self, link, is_email=False):
+        return link
+
 
 notify_email_markdown = mistune.Markdown(
     renderer=NotifyEmailMarkdownRenderer(),
     hard_wrap=True,
     use_xhtml=False,
 )
+notify_plain_text_email_markdown = mistune.Markdown(
+    renderer=NotifyPlainTextEmailMarkdownRenderer(),
+    hard_wrap=True,
+)
 notify_letter_preview_markdown = mistune.Markdown(
     renderer=NotifyLetterMarkdownPreviewRenderer(),
-    hard_wrap=True,
-    use_xhtml=False,
-)
-notify_letter_dvla_markdown = mistune.Markdown(
-    renderer=NotifyLetterMarkdownDVLARenderer(),
     hard_wrap=True,
     use_xhtml=False,
 )

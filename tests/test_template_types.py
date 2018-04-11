@@ -12,7 +12,6 @@ from notifications_utils.template import (
     HTMLEmailTemplate,
     LetterPreviewTemplate,
     LetterImageTemplate,
-    LetterDVLATemplate,
     PlainTextEmailTemplate,
     SMSMessageTemplate,
     SMSPreviewTemplate,
@@ -160,16 +159,6 @@ def test_complete_html(complete_html, branding_should_be_present, brand_logo, br
         ),
         'notifications_utils.template.notify_letter_preview_markdown'
     ],
-    [
-        LetterDVLATemplate,
-        {'notification_reference': "1"},
-        (
-            'the quick brown fox\n'
-            '\n'
-            'jumped over the lazy dog'
-        ),
-        'notifications_utils.template.notify_letter_dvla_markdown'
-    ]
 ])
 def test_markdown_in_templates(
     template_class,
@@ -248,7 +237,7 @@ def test_HTML_template_has_URLs_replaced_with_links():
 )
 def test_escaping_govuk_in_email_templates(template_content, expected):
     assert unlink_govuk_escaped(template_content) == expected
-    assert str(PlainTextEmailTemplate({'content': template_content, 'subject': ''})) == expected
+    assert expected in str(PlainTextEmailTemplate({'content': template_content, 'subject': ''}))
     assert expected in str(HTMLEmailTemplate({'content': template_content, 'subject': ''}))
 
 
@@ -450,7 +439,7 @@ def test_letter_preview_renderer(
     ))
     remove_empty_lines.assert_called_once_with(expected_address)
     jinja_template.assert_called_once_with({
-        'address': '123 Street',
+        'address': '<ul><li>123 Street</li></ul>',
         'subject': 'Subject',
         'message': 'Bar',
         'date': '1 January 2001',
@@ -466,6 +455,33 @@ def test_letter_preview_renderer(
         mock.call(expected_address),
         mock.call(expected_rendered_contact_block),
     ]
+
+
+@freeze_time("2001-01-01 12:00:00.000000")
+@mock.patch('notifications_utils.template.LetterPreviewTemplate.jinja_template.render')
+def test_letter_preview_renderer_without_mocks(jinja_template):
+
+    str(LetterPreviewTemplate(
+        {'content': 'Foo', 'subject': 'Subject'},
+        {'addressline1': 'name', 'addressline2': 'street', 'postcode': 'SW1 1AA'},
+        contact_block='',
+    ))
+
+    jinja_template_locals = jinja_template.call_args_list[0][0][0]
+
+    assert jinja_template_locals['address'] == (
+        '<ul>'
+        '<li>name</li>'
+        '<li>street</li>'
+        '<li>SW1 1AA</li>'
+        '</ul>'
+    )
+    assert jinja_template_locals['subject'] == 'Subject'
+    assert jinja_template_locals['message'] == "Foo"
+    assert jinja_template_locals['date'] == '1 January 2001'
+    assert jinja_template_locals['contact_block'] == ''
+    assert jinja_template_locals['admin_base_url'] == 'http://localhost:6012'
+    assert jinja_template_locals['logo_file_name'] == 'hm-government.svg'
 
 
 @mock.patch('notifications_utils.template.LetterImageTemplate.jinja_template.render')
@@ -530,7 +546,6 @@ def test_subject_line_gets_applied_to_correct_template_types():
         PlainTextEmailTemplate,
         LetterPreviewTemplate,
         LetterImageTemplate,
-        LetterDVLATemplate,
     ]:
         assert issubclass(cls, WithSubjectTemplate)
     for cls in [
@@ -552,7 +567,7 @@ def test_subject_line_gets_replaced():
         mock.call('content', {}, html='escape', redact_missing_personalisation=False),
     ]),
     (WithSubjectTemplate, {}, [
-        mock.call('content', {}, html='escape', redact_missing_personalisation=False),
+        mock.call('content', {}, html='passthrough', redact_missing_personalisation=False, markdown_lists=True),
     ]),
     (PlainTextEmailTemplate, {}, [
         mock.call('content', {}, html='passthrough', markdown_lists=True)
@@ -588,31 +603,11 @@ def test_subject_line_gets_replaced():
     ]),
     (LetterImageTemplate, {'image_url': 'http://example.com', 'page_count': 1}, [
     ]),
-    (LetterDVLATemplate, {'notification_reference': "1", 'contact_block': 'www.gov.uk  '}, [
-        mock.call('www.gov.uk', {}, html='strip_dvla_markup'),
-        mock.call((
-            '((address line 1))\n'
-            '\n'
-            '((address line 2))\n'
-            '((address line 3))\n'
-            '((address line 4))\n'
-            '((address line 5))\n'
-            '((address line 6))\n'
-            '((postcode))'
-        ), {
-            'addressline3': '',
-            'addressline4': '',
-            'addressline5': '',
-            'addressline6': '',
-        }),
-        mock.call('subject', {}, html='strip_dvla_markup'),
-        mock.call('content', {}, markdown_lists=True, html='strip_dvla_markup'),
-    ]),
     (Template, {'redact_missing_personalisation': True}, [
         mock.call('content', {}, html='escape', redact_missing_personalisation=True),
     ]),
     (WithSubjectTemplate, {'redact_missing_personalisation': True}, [
-        mock.call('content', {}, html='escape', redact_missing_personalisation=True),
+        mock.call('content', {}, html='passthrough', redact_missing_personalisation=True, markdown_lists=True),
     ]),
     (EmailPreviewTemplate, {'redact_missing_personalisation': True}, [
         mock.call('content', {}, html='escape', markdown_lists=True, redact_missing_personalisation=True),
@@ -653,7 +648,7 @@ def test_templates_handle_html_and_redacting(
 
 @pytest.mark.parametrize('template_class, extra_args, expected_remove_whitespace_calls', [
     (PlainTextEmailTemplate, {}, [
-        mock.call('content'),
+        mock.call('\n\ncontent'),
         mock.call(Markup('subject')),
         mock.call(Markup('subject')),
     ]),
@@ -698,18 +693,6 @@ def test_templates_handle_html_and_redacting(
         mock.call(Markup('subject')),
         mock.call(Markup('subject')),
     ]),
-    (LetterDVLATemplate, {'notification_reference': "1", 'contact_block': 'www.gov.uk  '}, [
-        mock.call(Markup('www.gov.uk')),
-        mock.call(
-            "<span class='placeholder'>((address line 1))</span>\n\n"
-            "<span class='placeholder'>((address line 2))</span>\n\n\n\n\n"
-            "<span class='placeholder'>((postcode))</span>"
-        ),
-        mock.call(Markup('subject')),
-        mock.call(Markup('content<cr><cr>')),
-        mock.call(Markup('subject')),
-        mock.call(Markup('subject')),
-    ]),
 ])
 @mock.patch('notifications_utils.template.remove_whitespace_before_punctuation', side_effect=lambda x: x)
 def test_templates_remove_whitespace_before_punctuation(
@@ -730,7 +713,7 @@ def test_templates_remove_whitespace_before_punctuation(
 
 @pytest.mark.parametrize('template_class, extra_args, expected_calls', [
     (PlainTextEmailTemplate, {}, [
-        mock.call('content'),
+        mock.call('\n\ncontent'),
         mock.call(Markup('subject')),
     ]),
     (HTMLEmailTemplate, {}, [
@@ -756,10 +739,6 @@ def test_templates_remove_whitespace_before_punctuation(
     (LetterPreviewTemplate, {'contact_block': 'www.gov.uk'}, [
         mock.call(Markup('subject')),
         mock.call(Markup('content<div class=\'linebreak-block\'>&nbsp;</div>')),
-    ]),
-    (LetterDVLATemplate, {'notification_reference': "1", 'contact_block': 'www.gov.uk  '}, [
-        mock.call('subject'),
-        mock.call('content<cr><cr>'),
     ]),
 ])
 @mock.patch('notifications_utils.template.make_quotes_smart', side_effect=lambda x: x)
@@ -838,14 +817,6 @@ def test_basic_templates_return_markup():
             contact_block='((contact_block))',
             image_url='http://example.com',
             page_count=99,
-        ),
-        ['content', 'subject', 'contact_block'],
-    ),
-    (
-        LetterDVLATemplate(
-            {"content": "((content))", "subject": "((subject))"},
-            contact_block='((contact_block))',
-            notification_reference='foo',
         ),
         ['content', 'subject', 'contact_block'],
     ),
@@ -1316,104 +1287,6 @@ dvla_file_spec = [
 ]
 
 
-@freeze_time("2016-04-29 12:00:00.000000")
-@pytest.mark.parametrize('field', dvla_file_spec)
-def test_letter_output_template(field):
-    # To debug this test it’s helpful uncomment the following line:
-    # print(field)
-    template = LetterDVLATemplate(
-        {
-            "content": (
-                'Dear ((name)),\n\n'
-                'Thank you for applying to register a lasting power of '
-                'attorney (LPA) for property and financial affairs. We '
-                'have checked your application and...'
-            ),
-            'subject': 'Your ((thing)) is something & something',
-        },
-        {
-            'thing': 'application',
-            'name': 'Henry Hadlow',
-            'addressline1': 'Mr Henry Hadlow',
-            'addressline2': '123 Electric Avenue',
-            'addressline3': 'Great Yarmouth',
-            'addressline4': 'Norfolk',
-            'addressline5': '',
-            'addressline6': '',
-            'postcode': 'NR1 5PQ',
-        },
-        notification_reference="reference",
-        contact_block="""
-            The Pension Service
-            Mail Handling Site A
-            Wolverhampton  WV9 1LU
-
-            Telephone: 0845 300 0168
-            Email: fpc.customercare@dwp.gsi.gov.uk
-            Monday - Friday  8am - 6pm
-            www.gov.uk
-        """,
-    )
-    assert str(template).split('|')[int(field['Field number']) - 1] == field['Example']
-
-
-def test_letter_output_pipe_delimiting():
-    template = LetterDVLATemplate(
-        {
-            "content": 'Pipes | pipes | everywhere',
-            'subject': 'Your | is due soon',
-        },
-        {
-            'thing': '|',
-            'name': '|',
-            'address line 1': '|',
-            'address line 2': 'Managing Director',
-            'address line 3': '123 Electric Avenue',
-            'address line 4': 'Great Yarmouth',
-            'address line 5': 'Norfolk',
-            'address line 6': '',
-            'postcode': 'NR1 5PQ',
-        },
-        notification_reference="1",
-    )
-
-    assert len(str(template).split('|')) == len(dvla_file_spec)
-    assert 'Pipes pipes everywhere' in str(template)
-
-
-@pytest.mark.parametrize('id, expected_exception', [
-    (None, 'notification_reference is required'),
-    ("01234567891234567", 'notification_reference cannot be longer than 16 chars')
-])
-def test_letter_output_numeric_id(id, expected_exception):
-    with pytest.raises(TypeError) as error:
-        LetterDVLATemplate(
-            {'content': '', 'subject': ''},
-            notification_reference=id,
-        )
-    assert str(error.value) == expected_exception
-
-
-def test_letter_output_stores_valid_notification_reference():
-    assert LetterDVLATemplate(
-        {'content': '', 'subject': ''},
-        notification_reference="1234567",
-    ).notification_reference == "1234567"
-
-
-@pytest.mark.parametrize('extra_args, expected_field', [
-    ({}, '500'),
-    ({'org_id': '001'}, '001'),
-])
-def test_letter_output_notification_reference(extra_args, expected_field):
-    template = LetterDVLATemplate(
-        {'content': '', 'subject': ''},
-        notification_reference="1234567",
-        **extra_args
-    )
-    assert str(template).split('|')[1] == expected_field
-
-
 @pytest.mark.parametrize("address, expected", [
     (
         {
@@ -1508,10 +1381,9 @@ def test_letter_output_notification_reference(extra_args, expected_field):
     ),
 ])
 def test_letter_address_format(address, expected):
-    template = LetterDVLATemplate(
+    template = LetterPreviewTemplate(
         {'content': '', 'subject': ''},
         address,
-        notification_reference="1234567",
     )
     assert template.values_with_default_optional_address_lines == expected
     # check that we can actually build a valid letter from this data
@@ -1531,13 +1403,12 @@ def test_letter_address_format(address, expected):
             'New paragraph'
         ),
         (
-            'Here is a list of bullets:'
-            '<cr>'
-            '<op><bul><tab>one'
-            '<op><bul><tab>two'
-            '<op><bul><tab>three'
-            '<p><cr>'
-            'New paragraph<cr><cr>'
+            '<ul>\n'
+            '<li>one</li>\n'
+            '<li>two</li>\n'
+            '<li>three</li>\n'
+            '</ul>\n'
+            'New paragraph\n'
         )
     ),
     (
@@ -1549,12 +1420,12 @@ def test_letter_address_format(address, expected):
             '* three\n'
         ),
         (
-            '<h2>List title:<normal>'
-            '<cr>'
-            '<op><bul><tab>one'
-            '<op><bul><tab>two'
-            '<op><bul><tab>three'
-            '<p><cr>'
+            '<h2>List title:</h2>\n'
+            '<ul>\n'
+            '<li>one</li>\n'
+            '<li>two</li>\n'
+            '<li>three</li>\n'
+            '</ul>\n'
         )
     ),
     (
@@ -1566,20 +1437,19 @@ def test_letter_address_format(address, expected):
             '3. three\n'
         ),
         (
-            'Here’s an ordered list:<cr>'
-            '<np>one'
-            '<np>two'
-            '<np>three'
-            '<p><cr>'
+            'Here’s an ordered list:<div class=\'linebreak‑block\'>&nbsp;</div><ol>\n'
+            '<li>one</li>\n'
+            '<li>two</li>\n'
+            '<li>three</li>\n'
+            '</ol>'
         )
     ),
 ])
 def test_lists_in_combination_with_other_elements_in_letters(markdown, expected):
-    assert str(LetterDVLATemplate(
+    assert expected in str(LetterPreviewTemplate(
         {'content': markdown, 'subject': 'Hello'},
         {},
-        notification_reference="1234567",
-    )).split('|')[33] == '1 January 2001<cr><cr><h1>Hello<normal><cr><cr>' + expected
+    ))
 
 
 @pytest.mark.parametrize('template_class', [
@@ -1598,7 +1468,6 @@ def test_message_too_long(template_class):
     (PlainTextEmailTemplate, {}),
     (LetterPreviewTemplate, {}),
     (LetterImageTemplate, {'image_url': 'foo', 'page_count': 1}),
-    (LetterDVLATemplate, {'notification_reference': 'foo'})
 ])
 def test_non_sms_ignores_message_too_long(template_class, kwargs):
     body = 'a' * 1000
@@ -1610,7 +1479,6 @@ def test_non_sms_ignores_message_too_long(template_class, kwargs):
     (
         'content,'
         'expected_preview_markup,'
-        'expected_dvla_markup'
     ), [
         (
             'a\n\n\nb',
@@ -1619,9 +1487,7 @@ def test_non_sms_ignores_message_too_long(template_class, kwargs):
                 '<div class=\'linebreak‑block\'>&nbsp;</div>'
                 '<div class=\'linebreak\'>&nbsp;</div>'
                 'b'
-                '<div class=\'linebreak‑block\'>&nbsp;</div>'
             ),
-            'a<cr><cr><cr>b',
         ),
         (
             (
@@ -1647,20 +1513,6 @@ def test_non_sms_ignores_message_too_long(template_class, kwargs):
                 '<div class=\'linebreak\'>&nbsp;</div>'
                 '<div class=\'linebreak\'>&nbsp;</div>'
                 'foo'
-                '<div class=\'linebreak‑block\'>&nbsp;</div>'
-            ),
-            (
-                'a<cr>'
-                '<op><bul><tab>one'
-                '<op><bul><tab>two'
-                '<op><bul><tab>three<cr>'
-                'and a half<p>'
-                '<cr>'
-                '<cr>'
-                '<cr>'
-                '<cr>'
-                'foo<cr>'
-                '<cr>'
             ),
         ),
     ]
@@ -1668,13 +1520,9 @@ def test_non_sms_ignores_message_too_long(template_class, kwargs):
 def test_multiple_newlines_in_letters(
     content,
     expected_preview_markup,
-    expected_dvla_markup
 ):
     assert expected_preview_markup in str(LetterPreviewTemplate(
         {'content': content, 'subject': 'foo'}
-    ))
-    assert expected_dvla_markup in str(LetterDVLATemplate(
-        {'content': content, 'subject': 'foo'}, notification_reference=1
     ))
 
 
@@ -1692,7 +1540,6 @@ def test_multiple_newlines_in_letters(
     (HTMLEmailTemplate, {}),
     (EmailPreviewTemplate, {}),
     (LetterPreviewTemplate, {}),
-    (LetterDVLATemplate, {'notification_reference': 1}),
 ])
 def test_whitespace_in_subjects(template_class, subject, extra_args):
 
@@ -1701,6 +1548,29 @@ def test_whitespace_in_subjects(template_class, subject, extra_args):
         **extra_args
     )
     assert template_instance.subject == 'no break'
+
+
+@pytest.mark.parametrize('template_class, expected_output', [
+    (
+        PlainTextEmailTemplate,
+        'paragraph one\n\n\xa0\n\nparagraph two',
+    ),
+    (
+        HTMLEmailTemplate,
+        (
+            '<p style="Margin: 0 0 20px 0; font-size: 19px; line-height: 25px; color: #0B0C0C;">paragraph one</p>'
+            '<p style="Margin: 0 0 20px 0; font-size: 19px; line-height: 25px; color: #0B0C0C;">&nbsp;</p>'
+            '<p style="Margin: 0 0 20px 0; font-size: 19px; line-height: 25px; color: #0B0C0C;">paragraph two</p>'
+        ),
+    ),
+])
+def test_govuk_email_whitespace_hack(template_class, expected_output):
+
+    template_instance = template_class({
+        'content': 'paragraph one\n\n&nbsp;\n\nparagraph two',
+        'subject': 'foo'
+    })
+    assert expected_output in str(template_instance)
 
 
 def test_letter_preview_uses_non_breaking_hyphens():
@@ -1713,9 +1583,9 @@ def test_letter_preview_uses_non_breaking_hyphens():
 
 
 @freeze_time("2001-01-01 12:00:00.000000")
-def test_nested_lists_in_dvla_markup():
+def test_nested_lists_in_lettr_markup():
 
-    template_content = str(LetterDVLATemplate({
+    template_content = str(LetterPreviewTemplate({
         'content': (
             'nested list:\n'
             '\n'
@@ -1727,25 +1597,78 @@ def test_nested_lists_in_dvla_markup():
             '  - three three\n'
         ),
         'subject': 'foo',
-    }, notification_reference=1))
+    }))
 
     assert (
-        '1 January 2001<cr>'
-        '<cr>'
-        '<h1>foo<normal><cr>'
-        '<cr>'
-        'nested list:<cr>'
-        '<np>one'
-        '<np>two'
-        '<np>three<cr>'
-        '<op><bul><tab>three one'
-        '<op><bul><tab>three two'
-        '<op><bul><tab>three three'
-        '<p><cr>'
-    ) == template_content.split('|')[33]
+        '      <p>\n'
+        '        1 January 2001\n'
+        '      </p>\n'
+        '      <h1>\n'
+        '        foo\n'
+        '      </h1>\n'
+        '      nested list:<div class=\'linebreak‑block\'>&nbsp;</div><ol>\n'
+        '<li>one</li>\n'
+        '<li>two</li>\n'
+        '<li>three<ul>\n'
+        '<li>three one</li>\n'
+        '<li>three two</li>\n'
+        '<li>three three</li>\n'
+        '</ul></li>\n'
+        '</ol>\n'
+        '\n'
+        '    </div>\n'
+        '  </body>\n'
+        '</html>'
+    ) in template_content
 
 
 def test_that_print_template_is_the_same_as_preview():
     assert dir(LetterPreviewTemplate) == dir(LetterPrintTemplate)
     assert os.path.basename(LetterPreviewTemplate.jinja_template.filename) == 'preview.jinja2'
     assert os.path.basename(LetterPrintTemplate.jinja_template.filename) == 'print.jinja2'
+
+
+def test_plain_text_email_whitespace():
+    email = PlainTextEmailTemplate({'subject': 'foo', 'content': (
+        '# Heading\n'
+        '\n'
+        '1. one\n'
+        '2. two\n'
+        '3. three\n'
+        '\n'
+        '***\n'
+        '\n'
+        '# Heading\n'
+        '\n'
+        'Paragraph\n'
+        '\n'
+        'Paragraph\n'
+        '\n'
+        '^ callout\n'
+        '\n'
+        '1. one not four\n'
+        '1. two not five'
+    )})
+    assert str(email) == (
+        'Heading\n'
+        '-----------------------------------------------------------------\n'
+        '\n'
+        '1. one\n'
+        '2. two\n'
+        '3. three\n'
+        '\n'
+        '=================================================================\n'
+        '\n'
+        '\n'
+        'Heading\n'
+        '-----------------------------------------------------------------\n'
+        '\n'
+        'Paragraph\n'
+        '\n'
+        'Paragraph\n'
+        '\n'
+        'callout\n'
+        '\n'
+        '1. one not four\n'
+        '2. two not five\n'
+    )

@@ -4,6 +4,7 @@ from datetime import datetime
 
 from jinja2 import Environment, FileSystemLoader
 from flask import Markup
+from html import unescape
 
 from notifications_utils import SMS_CHAR_COUNT_LIMIT
 from notifications_utils.columns import Columns
@@ -11,14 +12,14 @@ from notifications_utils.field import Field
 from notifications_utils.formatters import (
     unlink_govuk_escaped,
     nl2br,
+    nl2li,
     add_prefix,
     notify_email_markdown,
+    notify_plain_text_email_markdown,
     notify_letter_preview_markdown,
-    notify_letter_dvla_markdown,
     remove_empty_lines,
     gsm_encode,
     escape_html,
-    fix_extra_newlines_in_dvla_lists,
     strip_dvla_markup,
     strip_pipes,
     remove_whitespace_before_punctuation,
@@ -28,6 +29,9 @@ from notifications_utils.formatters import (
     strip_characters_inserted_to_force_newlines,
     replace_hyphens_with_non_breaking_hyphens,
     tweak_dvla_list_markup,
+    remove_trailing_linebreak,
+    strip_leading_whitespace,
+    add_trailing_newline,
 )
 from notifications_utils.take import Take
 from notifications_utils.template_change import TemplateChange
@@ -134,15 +138,15 @@ class SMSMessageTemplate(Template):
         super().__init__(template, values)
 
     def __str__(self):
-        return Take.as_field(
+        return Take(Field(
             self.content, self.values, html='passthrough'
-        ).then(
+        )).then(
             add_prefix, self.prefix
         ).then(
             gsm_encode
         ).then(
             remove_whitespace_before_punctuation
-        ).as_string.strip()
+        ).strip()
 
     @property
     def prefix(self):
@@ -198,12 +202,12 @@ class SMSPreviewTemplate(SMSMessageTemplate):
             'show_sender': self.show_sender,
             'recipient': Field('((phone number))', self.values, with_brackets=False, html='escape'),
             'show_recipient': self.show_recipient,
-            'body': Take.as_field(
+            'body': Take(Field(
                 self.content,
                 self.values,
                 html='escape',
                 redact_missing_personalisation=self.redact_missing_personalisation,
-            ).then(
+            )).then(
                 add_prefix, (escape_html(self.prefix) or None) if self.show_prefix else None
             ).then(
                 gsm_encode if self.downgrade_non_gsm_characters else str
@@ -211,7 +215,7 @@ class SMSPreviewTemplate(SMSMessageTemplate):
                 remove_whitespace_before_punctuation
             ).then(
                 nl2br
-            ).as_string
+            )
         }))
 
 
@@ -226,16 +230,25 @@ class WithSubjectTemplate(Template):
         self._subject = template['subject'].replace('\r', '').replace('\n', '').replace('\t', ' ').strip()
         super().__init__(template, values, redact_missing_personalisation=redact_missing_personalisation)
 
+    def __str__(self):
+        return str(Field(
+            self.content,
+            self.values,
+            html='passthrough',
+            redact_missing_personalisation=self.redact_missing_personalisation,
+            markdown_lists=True,
+        ))
+
     @property
     def subject(self):
-        return Markup(Take.as_field(
+        return Markup(Take(Field(
             self._subject,
             self.values,
             html='escape',
             redact_missing_personalisation=self.redact_missing_personalisation,
-        ).then(
+        )).then(
             do_nice_typography
-        ).as_string)
+        ))
 
     @property
     def placeholders(self):
@@ -245,24 +258,32 @@ class WithSubjectTemplate(Template):
 class PlainTextEmailTemplate(WithSubjectTemplate):
 
     def __str__(self):
-        return Take.as_field(
+        return Take(Field(
             self.content, self.values, html='passthrough', markdown_lists=True
-        ).then(
+        )).then(
             unlink_govuk_escaped
         ).then(
+            notify_plain_text_email_markdown
+        ).then(
             do_nice_typography
-        ).as_string
+        ).then(
+            unescape
+        ).then(
+            strip_leading_whitespace
+        ).then(
+            add_trailing_newline
+        )
 
     @property
     def subject(self):
-        return Markup(Take.as_field(
+        return Markup(Take(Field(
             self._subject,
             self.values,
             html='passthrough',
             redact_missing_personalisation=self.redact_missing_personalisation
-        ).then(
+        )).then(
             do_nice_typography
-        ).as_string)
+        ))
 
 
 class HTMLEmailTemplate(WithSubjectTemplate):
@@ -341,14 +362,14 @@ class EmailPreviewTemplate(WithSubjectTemplate):
 
     @property
     def subject(self):
-        return Take.as_field(
+        return Take(Field(
             self._subject,
             self.values,
             html='escape',
             redact_missing_personalisation=self.redact_missing_personalisation
-        ).then(
+        )).then(
             do_nice_typography
-        ).as_string
+        )
 
 
 class LetterPreviewTemplate(WithSubjectTemplate):
@@ -384,13 +405,13 @@ class LetterPreviewTemplate(WithSubjectTemplate):
             'admin_base_url': self.admin_base_url,
             'logo_file_name': self.logo_file_name,
             'subject': self.subject,
-            'message': Take.as_field(
+            'message': Take(Field(
                 strip_dvla_markup(self.content),
                 self.values,
                 html='escape',
                 markdown_lists=True,
                 redact_missing_personalisation=self.redact_missing_personalisation,
-            ).then(
+            )).then(
                 strip_pipes
             ).then(
                 make_markdown_take_notice_of_multiple_newlines
@@ -401,11 +422,13 @@ class LetterPreviewTemplate(WithSubjectTemplate):
             ).then(
                 do_nice_typography
             ).then(
+                remove_trailing_linebreak
+            ).then(
                 replace_hyphens_with_non_breaking_hyphens
             ).then(
                 tweak_dvla_list_markup
-            ).as_string,
-            'address': Take.as_field(
+            ),
+            'address': Take(Field(
                 self.address_block,
                 (
                     self.values_with_default_optional_address_lines
@@ -417,16 +440,16 @@ class LetterPreviewTemplate(WithSubjectTemplate):
                 ),
                 html='escape',
                 with_brackets=False
-            ).then(
+            )).then(
                 strip_pipes
             ).then(
                 remove_empty_lines
             ).then(
                 remove_whitespace_before_punctuation
             ).then(
-                nl2br
-            ).as_string,
-            'contact_block': Take.as_field(
+                nl2li
+            ),
+            'contact_block': Take(Field(
                 '\n'.join(
                     line.strip()
                     for line in self.contact_block.split('\n')
@@ -434,30 +457,30 @@ class LetterPreviewTemplate(WithSubjectTemplate):
                 self.values,
                 redact_missing_personalisation=self.redact_missing_personalisation,
                 html='escape',
-            ).then(
+            )).then(
                 remove_whitespace_before_punctuation
             ).then(
                 nl2br
             ).then(
                 strip_pipes
-            ).as_string,
+            ),
             'date': datetime.utcnow().strftime('%-d %B %Y')
         }))
 
     @property
     def subject(self):
-        return Take.as_field(
+        return Take(Field(
             self._subject,
             self.values,
             redact_missing_personalisation=self.redact_missing_personalisation,
             html='escape',
-        ).then(
+        )).then(
             do_nice_typography
         ).then(
             strip_pipes
         ).then(
             strip_dvla_markup
-        ).as_string
+        )
 
     @property
     def placeholders(self):
@@ -512,164 +535,6 @@ class LetterImageTemplate(LetterPreviewTemplate):
         }))
 
 
-class LetterDVLATemplate(LetterPreviewTemplate):
-
-    address_block = '\n'.join([
-        '((address line 1))',
-        '',
-        '((address line 2))',
-        '((address line 3))',
-        '((address line 4))',
-        '((address line 5))',
-        '((address line 6))',
-        '((postcode))'
-    ])
-
-    def __init__(
-        self,
-        template,
-        values=None,
-        notification_reference=None,
-        contact_block=None,
-        org_id='500',
-    ):
-        super().__init__(template, values, contact_block=contact_block)
-        self.notification_reference = notification_reference
-        self.org_id = org_id
-
-    @property
-    def notification_reference(self):
-        return self._notification_reference
-
-    @notification_reference.setter
-    def notification_reference(self, value):
-        if not value:
-            raise TypeError('notification_reference is required')
-        if len(str(value)) > 16:
-            raise TypeError('notification_reference cannot be longer than 16 chars')
-        self._notification_reference = str(value)
-
-    @property
-    def subject(self):
-        return Take.as_field(
-            self._subject,
-            self.values,
-            html='strip_dvla_markup'
-        ).then(
-            do_nice_typography
-        ).as_string
-
-    def __str__(self):
-
-        OTT = '140'
-        ORG_ID = self.org_id
-        ORG_NOTIFICATION_TYPE = '001'
-        ORG_NAME = ''
-        NOTIFICATION_ID = self.notification_reference
-        NOTIFICATION_DATE = ''
-        CUSTOMER_REFERENCE = ''
-        ADDITIONAL_LINE_1, \
-            ADDITIONAL_LINE_2, \
-            ADDITIONAL_LINE_3, \
-            ADDITIONAL_LINE_4, \
-            ADDITIONAL_LINE_5, \
-            ADDITIONAL_LINE_6, \
-            ADDITIONAL_LINE_7, \
-            ADDITIONAL_LINE_8, \
-            ADDITIONAL_LINE_9, \
-            ADDITIONAL_LINE_10 = [
-                line.strip()
-                for line in
-                Take.as_field(
-                    self.contact_block,
-                    self.values,
-                    html='strip_dvla_markup'
-                ).then(
-                    remove_whitespace_before_punctuation
-                ).as_string.split('\n') + ([''] * 10)
-            ][:10]
-        TO_NAME_1,\
-            _,\
-            TO_ADDRESS_LINE_1,\
-            TO_ADDRESS_LINE_2,\
-            TO_ADDRESS_LINE_3,\
-            TO_ADDRESS_LINE_4,\
-            TO_ADDRESS_LINE_5,\
-            TO_POST_CODE, = Take.as_field(
-                self.address_block,
-                self.values_with_default_optional_address_lines,
-            ).then(remove_whitespace_before_punctuation).as_string.split('\n')
-        TO_NAME_2 = ''
-        RETURN_NAME = ''
-        RETURN_ADDRESS_LINE_1 = ''
-        RETURN_ADDRESS_LINE_2 = ''
-        RETURN_ADDRESS_LINE_3 = ''
-        RETURN_ADDRESS_LINE_4 = ''
-        RETURN_ADDRESS_LINE_5 = ''
-        RETURN_POST_CODE = ''
-        SUBJECT_LINE = ''
-        NOTIFICATION_BODY = (
-            '{}<cr><cr>'
-            '<h1>{}<normal><cr><cr>'
-            '{}'
-        ).format(
-            datetime.utcnow().strftime('%-d %B %Y'),
-            self.subject,
-            Take.as_field(
-                self.content, self.values, markdown_lists=True, html='strip_dvla_markup'
-            ).then(
-                make_markdown_take_notice_of_multiple_newlines
-            ).then(
-                notify_letter_dvla_markdown
-            ).then(
-                strip_characters_inserted_to_force_newlines
-            ).then(
-                fix_extra_newlines_in_dvla_lists
-            ).then(
-                do_nice_typography
-            ).then(
-                tweak_dvla_list_markup
-            ).as_string
-        )
-
-        return '|'.join(strip_pipes(line) for line in [
-            OTT,
-            ORG_ID,
-            ORG_NOTIFICATION_TYPE,
-            ORG_NAME,
-            NOTIFICATION_ID,
-            NOTIFICATION_DATE,
-            CUSTOMER_REFERENCE,
-            ADDITIONAL_LINE_1,
-            ADDITIONAL_LINE_2,
-            ADDITIONAL_LINE_3,
-            ADDITIONAL_LINE_4,
-            ADDITIONAL_LINE_5,
-            ADDITIONAL_LINE_6,
-            ADDITIONAL_LINE_7,
-            ADDITIONAL_LINE_8,
-            ADDITIONAL_LINE_9,
-            ADDITIONAL_LINE_10,
-            TO_NAME_1,
-            TO_NAME_2,
-            TO_ADDRESS_LINE_1,
-            TO_ADDRESS_LINE_2,
-            TO_ADDRESS_LINE_3,
-            TO_ADDRESS_LINE_4,
-            TO_ADDRESS_LINE_5,
-            TO_POST_CODE,
-            RETURN_NAME,
-            RETURN_ADDRESS_LINE_1,
-            RETURN_ADDRESS_LINE_2,
-            RETURN_ADDRESS_LINE_3,
-            RETURN_ADDRESS_LINE_4,
-            RETURN_ADDRESS_LINE_5,
-            RETURN_POST_CODE,
-            SUBJECT_LINE,
-            NOTIFICATION_BODY,
-        ])
-
-
 class NeededByTemplateError(Exception):
     def __init__(self, keys):
         super(NeededByTemplateError, self).__init__(", ".join(keys))
@@ -686,19 +551,19 @@ def get_sms_fragment_count(character_count):
 
 def get_html_email_body(template_content, template_values, redact_missing_personalisation=False):
 
-    return Take.as_field(
+    return Take(Field(
         template_content,
         template_values,
         html='escape',
         markdown_lists=True,
         redact_missing_personalisation=redact_missing_personalisation,
-    ).then(
+    )).then(
         unlink_govuk_escaped
     ).then(
         notify_email_markdown
     ).then(
         do_nice_typography
-    ).as_string
+    )
 
 
 def do_nice_typography(value):
@@ -710,4 +575,4 @@ def do_nice_typography(value):
         make_quotes_smart
     ).then(
         replace_hyphens_with_en_dashes
-    ).as_string
+    )

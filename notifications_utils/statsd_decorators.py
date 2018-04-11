@@ -20,14 +20,9 @@ def statsd(namespace):
                 )
 
             except Exception as e:
-                current_app.logger.error(
-                    "{namespace} call {func} failed".format(
-                        namespace=namespace, func=func.__name__
-                    )
-                )
                 raise e
             else:
-                current_app.logger.info(
+                current_app.logger.debug(
                     "{namespace} call {func} took {time}".format(
                         namespace=namespace, func=func.__name__, time="{0:.4f}".format(elapsed_time)
                     )
